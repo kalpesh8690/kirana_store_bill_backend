@@ -1,0 +1,6 @@
+name,sku,price,description,category,stockQuantity,isActive
+"Basic T-Shirt","SKU-TSHIRT-001",9.99,"Cotton T-Shirt",,100,true
+"Premium Hoodie","SKU-HOODIE-002",39.5,"Fleece-lined hoodie",,25,true
+"Coffee Mug","SKU-MUG-003",4.75,"Ceramic mug 300ml",,250,true
+"Wireless Mouse","SKU-MOUSE-004",14.99,"2.4G wireless mouse",,60,true
+"Notebook A5","SKU-NOTE-005",2.5,"A5 ruled notebook 100 pages",,500,true
