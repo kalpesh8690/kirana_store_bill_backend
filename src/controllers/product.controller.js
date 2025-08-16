@@ -134,10 +134,7 @@ export async function bulkUpload(req, res, next) {
       }
 
       if (categoryRaw) {
-        const cat = String(categoryRaw).trim();
-        if (/^[a-f0-9]{24}$/i.test(cat)) {
-          productData.category = new mongoose.Types.ObjectId(cat);
-        }
+        productData.category = categoryRaw;
         // If not a valid ObjectId, ignore; category by name mapping can be added later
       }
 
