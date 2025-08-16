@@ -1,6 +1,7 @@
 import { StatusCodes } from 'http-status-codes';
 import Payment from '../models/Payment.js';
 import Invoice from '../models/Invoice.js';
+import Order from '../models/Order.js';
 import { ApiError } from '../utils/ApiError.js';
 
 export async function createPayment(req, res, next) {
@@ -10,13 +11,36 @@ export async function createPayment(req, res, next) {
     if (!invoice) return next(new ApiError(StatusCodes.BAD_REQUEST, 'Invoice not found'));
 
     const payment = await Payment.create({ invoice: invoice._id, transactionId, amount, method, status });
-    // Update invoice paid amount + status
-    const amountPaid = (invoice.amountPaid || 0) + amount;
-    let paymentStatus = 'partial';
-    if (amountPaid <= 0) paymentStatus = 'unpaid';
-    // We don't have invoice total here; treat paid when status=success and explicit request sets it later
-    if (status === 'success') paymentStatus = 'partial';
-    await Invoice.findByIdAndUpdate(invoice._id, { amountPaid, paymentStatus }, { new: true });
+    
+    // Get all payments for this invoice including the new one
+    const payments = await Payment.find({ invoice: invoice._id });
+    const totalPaid = payments.reduce((sum, p) => {
+      if (p.status === 'success') {
+        return sum + p.amount;
+      }
+      return sum;
+    }, 0);
+    
+    // Get the order to compare total amount
+    const order = await Order.findById(invoice.order);
+    if (!order) return next(new ApiError(StatusCodes.BAD_REQUEST, 'Order not found'));
+    
+    // Determine payment status
+    let paymentStatus = 'unpaid';
+    if (totalPaid > 0) {
+      paymentStatus = totalPaid >= order.total ? 'paid' : 'partial';
+      
+      // Update order status if payment is complete
+      if (paymentStatus === 'paid' && order.status === 'pending') {
+        await Order.findByIdAndUpdate(order._id, { status: 'paid' });
+      }
+    }
+    
+    // Update invoice
+    await Invoice.findByIdAndUpdate(invoice._id, { 
+      amountPaid: totalPaid, 
+      paymentStatus 
+    }, { new: true });
 
     res.status(StatusCodes.CREATED).json(payment);
   } catch (err) {
@@ -49,6 +73,43 @@ export async function updatePayment(req, res, next) {
   try {
     const payment = await Payment.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
     if (!payment) return next(new ApiError(StatusCodes.NOT_FOUND, 'Payment not found'));
+    
+    // Update invoice payment status and amount paid
+    const invoice = await Invoice.findById(payment.invoice);
+    if (invoice) {
+      // Get all payments for this invoice
+      const payments = await Payment.find({ invoice: invoice._id });
+      const totalPaid = payments.reduce((sum, p) => {
+        if (p.status === 'success') {
+          return sum + p.amount;
+        }
+        return sum;
+      }, 0);
+      
+      // Update invoice payment status
+      let paymentStatus = 'unpaid';
+      if (totalPaid > 0) {
+        // Get order to compare total amount
+        const order = await Order.findById(invoice.order);
+        if (order) {
+          paymentStatus = totalPaid >= order.total ? 'paid' : 'partial';
+          
+          // Update order status if payment is complete
+          if (paymentStatus === 'paid' && order.status === 'pending') {
+            await Order.findByIdAndUpdate(order._id, { status: 'paid' });
+          }
+        } else {
+          paymentStatus = 'partial';
+        }
+      }
+      
+      // Update invoice
+      await Invoice.findByIdAndUpdate(invoice._id, {
+        amountPaid: totalPaid,
+        paymentStatus
+      });
+    }
+    
     res.json(payment);
   } catch (err) {
     next(err);
@@ -57,8 +118,51 @@ export async function updatePayment(req, res, next) {
 
 export async function removePayment(req, res, next) {
   try {
-    const payment = await Payment.findByIdAndDelete(req.params.id);
+    const payment = await Payment.findById(req.params.id);
     if (!payment) return next(new ApiError(StatusCodes.NOT_FOUND, 'Payment not found'));
+    
+    // Store invoice ID before deleting payment
+    const invoiceId = payment.invoice;
+    
+    // Delete the payment
+    await Payment.findByIdAndDelete(req.params.id);
+    
+    // Update invoice payment status and amount paid
+    const invoice = await Invoice.findById(invoiceId);
+    if (invoice) {
+      // Get all remaining payments for this invoice
+      const payments = await Payment.find({ invoice: invoice._id });
+      const totalPaid = payments.reduce((sum, p) => {
+        if (p.status === 'success') {
+          return sum + p.amount;
+        }
+        return sum;
+      }, 0);
+      
+      // Update invoice payment status
+      let paymentStatus = 'unpaid';
+      if (totalPaid > 0) {
+        // Get order to compare total amount
+        const order = await Order.findById(invoice.order);
+        if (order) {
+          paymentStatus = totalPaid >= order.total ? 'paid' : 'partial';
+          
+          // Update order status based on payment status
+          if (paymentStatus !== 'paid' && order.status === 'paid') {
+            await Order.findByIdAndUpdate(order._id, { status: 'pending' });
+          }
+        } else {
+          paymentStatus = 'partial';
+        }
+      }
+      
+      // Update invoice
+      await Invoice.findByIdAndUpdate(invoice._id, {
+        amountPaid: totalPaid,
+        paymentStatus
+      });
+    }
+    
     res.status(StatusCodes.NO_CONTENT).send();
   } catch (err) {
     next(err);
